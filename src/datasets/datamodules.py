@@ -894,23 +894,26 @@ class ActsDatasetProcessing:
         Args:
             event_files (tuple): Tuple containing the loaded event data files.
         """
-        # Get kwargs input_variables if available
+        # Get kwargs input_variables, ... if available
         default_inputs = ["x", "y", "z"]
         input_variables = getattr(self, "input_variables", default_inputs)
-
-        # Get kwargs output_variables if available
         output_variables = getattr(self, "output_variables", ["pT", "pz"])
+        extra_variables = getattr(self, "extra_variables", [])
 
         groups = self._preprocess_groups(event_files)
         for group in groups:
             inputs = group[input_variables].values
             target = group[output_variables].values[0]
+            extra = group[extra_variables].values[0] if extra_variables else []
 
             zxy = torch.tensor(inputs, dtype=torch.float32)
             target_tensor = torch.tensor(target, dtype=torch.float32)
+            extra_tensor = (
+                torch.tensor(extra, dtype=torch.float32) #if extra_variables else []
+            )
 
             mask = torch.ones(zxy.shape[0], dtype=torch.bool)
-            yield zxy, mask, target_tensor
+            yield zxy, mask, target_tensor, extra_tensor
 
     def _preprocess_groups(self, event_files):
         """Preprocesses data for the specified event.
@@ -1007,8 +1010,12 @@ class ActsDatasetProcessing:
                     f"[red]Particle ids: {particles[~particles['particle_id'].isin(hits['particle_id'])]['particle_id'].unique()}"
                 )
 
+        ref_cols = ["particle_id", "event_id"]
+        if "track_id" in hits.columns and "track_id" in particles.columns:
+            ref_cols.append("track_id")
+
         merged_df = pd.merge(
-            hits, particles, on=["particle_id", "event_id"], validate="many_to_one"
+            hits, particles, on=ref_cols, validate="many_to_one"
         )
 
         # Add a variable counting the number of hits per track index
@@ -1090,7 +1097,6 @@ class ActsDatasetProcessing:
             print(f"Processing event {self.event}")
             print(f"Number of tracks: {len(grouped)}")
 
-        output_variables = getattr(self, "output_variables", ["pT", "pz"])
 
         # Get kwargs min_hits if available
         min_hits = getattr(self, "min_hits", 5)
@@ -1261,7 +1267,9 @@ class ActsDatasetProcessing:
                 any(
                     [
                         var in output_variables
-                        for var in ["d0", "z0", "x_perigee", "y_perigee", "z_perigee"]
+                        #for var in ["d0", "z0", "x_perigee", "y_perigee", "z_perigee"]
+                        # small hack to avoid computing impact parameters while we have them now in input data
+                        for var in ["x_perigee", "y_perigee", "z_perigee"]
                     ]
                 )
                 or computed_impact_parameters
@@ -1606,13 +1614,19 @@ class ActsRootDataset(ActsDatasetProcessing, RootIterBase):
 
         else:
 
+            # Opening the reconstructed track files (tracksummary_ambi.root)
+            # with information on fitted track paremeters and truth-matched true particle
             with uproot.open(track_params) as f:
                 ########################################
 
                 branches_to_load = [
                     "event_nr",
                     "track_nr",
-                    "majorityParticleId",
+                    "majorityParticleId_vertex_primary",
+                    "majorityParticleId_vertex_secondary",
+                    "majorityParticleId_particle",
+                    "majorityParticleId_generation",
+                    "majorityParticleId_sub_particle",
                     "t_charge",
                     "t_theta",
                     "t_eta",
@@ -1639,16 +1653,14 @@ class ActsRootDataset(ActsDatasetProcessing, RootIterBase):
                     f, keys=list(f.keys())[0], branches_to_load=branches_to_load
                 )
 
-                track_particles = extract_barcode(
-                    track_particles,
-                    idx_cols=["event_nr"] + ["event_idx", "sublist_idx"],
-                    barcode_col="majorityParticleId",
-                    barcode_index_col="elem_idx",
-                )
                 branches_to_load = [
                     "event_nr",
                     "track_nr",
-                    "majorityParticleId",
+                    "majorityParticleId_vertex_primary",
+                    "majorityParticleId_vertex_secondary",
+                    "majorityParticleId_particle",
+                    "majorityParticleId_generation",
+                    "majorityParticleId_sub_particle",
                     "nMajorityHits",
                     "eLOC0_fit",
                     "eLOC1_fit",
@@ -1670,12 +1682,6 @@ class ActsRootDataset(ActsDatasetProcessing, RootIterBase):
                     f, keys=list(f.keys())[0], branches_to_load=branches_to_load
                 )
 
-                track_params = extract_barcode(
-                    track_params,
-                    idx_cols=["event_nr"] + ["event_idx", "sublist_idx"],
-                    barcode_col="majorityParticleId",
-                    barcode_index_col="elem_idx",
-                )
 
             with uproot.open(track_hits) as f:
                 branches_to_load = [
@@ -1708,6 +1714,9 @@ class ActsRootDataset(ActsDatasetProcessing, RootIterBase):
                     "t_x": "tx",
                     "t_y": "ty",
                     "t_z": "tz",
+                    "g_x_hit": "x",
+                    "g_y_hit": "y",
+                    "g_z_hit": "z",
                 },
                 inplace=True,
             )
@@ -1715,6 +1724,11 @@ class ActsRootDataset(ActsDatasetProcessing, RootIterBase):
                 columns={
                     "event_nr": "event_id",
                     "track_nr": "track_id",
+                    "majorityParticleId_vertex_primary": "vertex_primary",
+                    "majorityParticleId_vertex_secondary": "vertex_secondary",
+                    "majorityParticleId_particle": "particle",
+                    "majorityParticleId_generation": "generation",
+                    "majorityParticleId_sub_particle": "sub_particle",
                 },
                 inplace=True,
             )
@@ -1722,6 +1736,11 @@ class ActsRootDataset(ActsDatasetProcessing, RootIterBase):
                 columns={
                     "event_nr": "event_id",
                     "track_nr": "track_id",
+                    "majorityParticleId_vertex_primary": "vertex_primary",
+                    "majorityParticleId_vertex_secondary": "vertex_secondary",
+                    "majorityParticleId_particle": "particle",
+                    "majorityParticleId_generation": "generation",
+                    "majorityParticleId_sub_particle": "sub_particle",
                 },
                 inplace=True,
             )
@@ -1765,6 +1784,7 @@ class ActsRootDataset(ActsDatasetProcessing, RootIterBase):
                         "sub_particle",
                     ]
                 ].apply(lambda row: "_".join(row.values.astype(str)), axis=1)
+
                 if not "particle_id" in hits:
                     # Use the particle_id of track_particles with matching event_id and track_id
                     hits["particle_id"] = hits.merge(
@@ -1795,15 +1815,16 @@ class ActsRootDataset(ActsDatasetProcessing, RootIterBase):
             ]
         ):
             # Combine vertex_primary, vertex_secondary, particle, generation and sub_particle into a single string
-            hits["particle_id"] = hits[
-                [
-                    "particles_vertex_primary",
-                    "particles_vertex_secondary",
-                    "particles_particle",
-                    "particles_generation",
-                    "particles_sub_particle",
-                ]
-            ].apply(lambda row: "_".join(row.values.astype(str)), axis=1)
+            if not "particle_id" in hits:
+                hits["particle_id"] = hits[
+                    [
+                        "particles_vertex_primary",
+                        "particles_vertex_secondary",
+                        "particles_particle",
+                        "particles_generation",
+                        "particles_sub_particle",
+                    ]
+                ].apply(lambda row: "_".join(row.values.astype(str)), axis=1)
             particles["particle_id"] = particles[
                 [
                     "vertex_primary",
@@ -2006,7 +2027,7 @@ class DatasetWrapper(Dataset):
             )
         ds = self.ds_class(self.dataset_dir, self.folder, **self.ds_class_kwargs)
         ds_loader = DataLoader(ds, num_workers=self.wrapper_workers)
-        zxy_list, mask_list, target_list = [], [], []
+        zxy_list, mask_list, target_list, extra_list = [], [], [], []
         particle_index = -1
         for particle_index, variables in enumerate(ds_loader):
             if particle_index < already_preprocessed:
@@ -2015,38 +2036,43 @@ class DatasetWrapper(Dataset):
                 print(f"Processing particle {particle_index}")
 
             # Add the current batch of data to the chunk
-            zxy, mask, target_tensor = [var.squeeze() for var in variables]
+            zxy, mask, target_tensor, extra_tensor = [var.squeeze() for var in variables]
             zxy_list.append(zxy)
             mask_list.append(mask)
             target_list.append(target_tensor)
+            extra_list.append(extra_tensor)
 
             # If the chunk reaches the split_size, save it and clear the chunk
             if len(zxy_list) >= self.split_size:
-                self._save_data(zxy_list, mask_list, target_list)
+                self._save_data(zxy_list, mask_list, target_list, extra_list)
                 # Clear the chunk after saving
                 zxy_list.clear()
                 mask_list.clear()
                 target_list.clear()
+                extra_list.clear()
 
         # Save any remaining data after the loop ends
         if zxy_list:
-            self._save_data(zxy_list, mask_list, target_list, final=True)
+            self._save_data(zxy_list, mask_list, target_list, extra_list, final=True)
 
         print(f"Processed {particle_index+1} particles")
         if particle_index < 0:
             raise ValueError("No particles were processed. Check your dataset.")
 
-    def _save_data(self, zxy_list, mask_list, target_list, final=False):
+    def _save_data(self, zxy_list, mask_list, target_list, extra_list, final=False):
         """Saves the dataset chunk, splitting it into parts if necessary based on split_size."""
         zxy_tensor = pad_sequence(zxy_list, batch_first=True, padding_value=0.0)
         mask_tensor = pad_sequence(mask_list, batch_first=True, padding_value=0)
         target_tensor = torch.stack(target_list)
+        extra_tensor = torch.stack(extra_list)
+
         lengths = torch.tensor([z.shape[0] for z in zxy_list])
         data_to_save = {
             "zxy": zxy_tensor,
             "mask": mask_tensor,
             "target": target_tensor,
             "lengths": lengths,
+            "extra": extra_tensor,
         }
         # Save the chunk to a split file
         if final:
