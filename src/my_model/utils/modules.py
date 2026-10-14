@@ -260,6 +260,8 @@ class Loss:
                 )
                 * 100
             )
+        elif "gaussian_nll" == self.mode:
+            self.loss_fn = nn.GaussianNLLLoss()
         else:
             raise ValueError(f"Uknown loss funtion: {self.mode}")
 
@@ -269,8 +271,13 @@ class Loss:
             torch.max((self.quantile - 1) * errors, self.quantile * errors)
         )
 
-    def __call__(self, preds, targets):
-        return self.loss_fn(preds, targets)
+    def __call__(self, preds, targets, vars=None):
+        if "gaussian_nll" == self.mode:
+            print("preds at 276 (beginning) are:", preds)
+            print("preds shape at 276 (beginning) are:", preds.shape)
+            return self.loss_fn(preds, targets, vars)
+        else:
+            return self.loss_fn(preds, targets)
 
 
 class Metric:
@@ -423,33 +430,77 @@ class BaseModel(L.LightningModule):
         inputs, mask, label = batch
 
         preds = self(inputs, mask=mask)
+        print("preds at 436 are:", preds)
+        print("preds at 436 shape is:", preds.shape)
         # Separate loss for each parameter
         losses = []
-        for i, criterion in enumerate(self.criterion):
-            preds_i = preds[:, i].squeeze()
-            label_i = label[:, i].squeeze()
-            param_token = self._get_loss_param_token(i)
-            # Optional normalization of the loss
-            if (
-                hasattr(self.hparams, "norm_loss")
-                and self.hparams.norm_loss is not None
-            ):
-                if self.hparams.norm_loss == "std":
-                    preds_i = preds_i / torch.std(label_i)
-                    label_i = label_i / torch.std(label_i)
-                else:
-                    raise ValueError(
-                        f"Unknown norm_loss method: {self.hparams.norm_loss}"
+
+        print("Criterion length:",len(self.criterion))
+
+        # if len(self.criterion) == 5: # case without uncertainties
+        #     for i, criterion in enumerate(self.criterion):
+        #         preds_i = preds[:, i].squeeze()
+        #         label_i = label[:, i].squeeze()
+        #         param_token = self._get_loss_param_token(i)
+        #         # Optional normalization of the loss
+        #         if (
+        #             hasattr(self.hparams, "norm_loss")
+        #             and self.hparams.norm_loss is not None
+        #         ):
+        #             if self.hparams.norm_loss == "std":
+        #                 preds_i = preds_i / torch.std(label_i)
+        #                 label_i = label_i / torch.std(label_i)
+        #             else:
+        #                 raise ValueError(
+        #                     f"Unknown norm_loss method: {self.hparams.norm_loss}"
+        #                 )
+        #         loss = criterion(preds_i, label_i)
+        #         losses.append(loss)
+        #         self.log(
+        #             f"{mode}_loss_{param_token}",
+        #             loss,
+        #             prog_bar=True,
+        #             logger=False,
+        #             batch_size=inputs.shape[0],
+        #         ) # old version
+        if len(self.criterion) == 5: 
+            for i, criterion in enumerate(self.criterion):
+                if i < 5:
+                    preds_i = preds[:, i].squeeze()
+                    print("preds_i is:", preds_i)
+                    print("preds_i shape is:", preds_i.shape)
+                    label_i = label[:, i].squeeze()
+                    vars_i = t2 = torch.ones(preds_i.shape, device='cuda:0')
+                    param_token = self._get_loss_param_token(i)
+                    # Optional normalization of the loss
+                    if (
+                        hasattr(self.hparams, "norm_loss")
+                        and self.hparams.norm_loss is not None
+                    ):
+                        if self.hparams.norm_loss == "std":
+                            preds_i = preds_i / torch.std(label_i)
+                            label_i = label_i / torch.std(label_i)
+                        else:
+                            raise ValueError(
+                                f"Unknown norm_loss method: {self.hparams.norm_loss}"
+                            )
+                    loss = criterion(preds_i, label_i, vars_i)
+                    print("Loss is:",loss)
+                    losses.append(loss)
+                    self.log(
+                        f"{mode}_loss_{param_token}",
+                        loss,
+                        prog_bar=True,
+                        logger=False,
+                        batch_size=inputs.shape[0],
                     )
-            loss = criterion(preds_i, label_i)
-            losses.append(loss)
-            self.log(
-                f"{mode}_loss_{param_token}",
-                loss,
-                prog_bar=True,
-                logger=False,
-                batch_size=inputs.shape[0],
+                else:
+                    break
+        else:
+            raise ValueError(
+                f"Number of criterion can only be 5 or 10"
             )
+        
         # Total loss
         if self.hparams.aggregate_loss == "sum":
             loss = torch.sum(torch.stack(losses))
