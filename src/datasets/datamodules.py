@@ -2297,19 +2297,20 @@ class DataModule(L.LightningDataModule):
         console.print(f"Finished preprocessing {self.hparams.dataset_type.capitalize()} Dataset", style="cyan")
 
     def train_dataloader(self):
-        return self._create_dataloader(self.train_dataset)
+        return self._create_dataloader(self.train_dataset, shuffle=True)
 
     def val_dataloader(self):
-        return self._create_dataloader(self.val_dataset)
+        return self._create_dataloader(self.val_dataset, shuffle=False)
 
     def test_dataloader(self):
-        return self._create_dataloader(self.test_dataset)
+        return self._create_dataloader(self.test_dataset, shuffle=False)
 
-    def _create_dataloader(self, dataset):
+    def _create_dataloader(self, dataset, shuffle=False):
         """Helper function to initialize data loaders."""
         return DataLoader(
             dataset,
             batch_size=self.hparams.batch_size,
+            shuffle=shuffle,
             num_workers=self.hparams.num_workers,
             collate_fn=self.collate_fn,
             persistent_workers=bool(self.hparams.num_workers)
