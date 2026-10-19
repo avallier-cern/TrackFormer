@@ -977,6 +977,8 @@ class ActsDatasetProcessing:
         truth_position = getattr(self, "truth_position", True)
         if truth_position:
             # Override reconstructed position by truth position
+            if verbose:
+                console.log("Overriding reconstructed position by truth position")
             hits["x"] = hits["tx"]
             hits["y"] = hits["ty"]
             hits["z"] = hits["tz"]
